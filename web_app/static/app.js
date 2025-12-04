@@ -228,7 +228,7 @@ async function finalizeAnalysis() {
     }
 
     isFinalizing = true;
-    analysisStatus.innerHTML = `<span style="color: blue;">Analyzing ${flagTimestamps.length} flagged clips with Gemini... <div class="loading"></div></span>`;
+    analysisStatus.innerHTML = `<span style="color: blue;">Analyzing 1 flagged clip with Gemini... <div class="loading"></div></span>`;
 
     try {
         const analyzeResponse = await fetch(`/analyze_flags/${currentFilename}`, {
