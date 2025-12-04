@@ -1,6 +1,5 @@
 let currentFilename = null;
-let dinoData = null;
-let geminiData = null;
+let analysisData = null;
 let videoDuration = 0;
 
 const videoPlayer = document.getElementById('videoPlayer');
@@ -80,18 +79,17 @@ async function analyzeVideo() {
     const analysisStatus = document.getElementById('analysisStatus');
 
     analyzeBtn.disabled = true;
-    analysisStatus.innerHTML = '<span style="color: blue;">Analyzing video with DINO and Gemini... <div class="loading"></div></span>';
+    analysisStatus.innerHTML = '<span style="color: blue;">Analyzing video with Gemini... This may take a while. <div class="loading"></div></span>';
 
     try {
-        const response = await fetch(`/analyze/full/${currentFilename}`, {
+        const response = await fetch(`/analyze/${currentFilename}`, {
             method: 'POST'
         });
 
         const result = await response.json();
 
         if (response.ok) {
-            dinoData = result.dino;
-            geminiData = result.gemini;
+            analysisData = result;
 
             displayResults();
             createTimeline();
@@ -112,57 +110,46 @@ function displayResults() {
     const dinoResults = document.getElementById('dinoResults');
     const geminiResults = document.getElementById('geminiResults');
 
-    if (dinoData) {
-        let dinoHTML = `
-            <p><strong>Total Frames Analyzed:</strong> ${dinoData.total_frames}</p>
-            <p><strong>Frame Interval:</strong> ${dinoData.frame_interval}s</p>
-            <p><strong>Detection Threshold:</strong> ${dinoData.threshold}</p>
-            <p><strong>Incidents Detected:</strong> ${dinoData.incidents.length}</p>
-        `;
+    if (!analysisData) return;
 
-        if (dinoData.incidents.length > 0) {
-            dinoHTML += '<ul class="incident-list">';
-            dinoData.incidents.forEach((incident, index) => {
-                dinoHTML += `
-                    <li class="incident-item" onclick="seekToTime(${incident.timestamp})">
+    // Summary panel
+    let summaryHTML = `
+        <p><strong>Video Duration:</strong> ${formatTime(analysisData.total_duration)}</p>
+        <p><strong>Incidents Detected:</strong> ${analysisData.total_incidents}</p>
+        <p><strong>Random Sampling:</strong> Every 1 second</p>
+        <p><strong>Detection Threshold:</strong> Score > 0.80</p>
+    `;
+    dinoResults.innerHTML = summaryHTML;
+
+    // Incidents panel
+    let geminiHTML = '';
+
+    if (analysisData.total_incidents === 0) {
+        geminiHTML = '<p>No incidents detected. All random scores were below 0.80.</p>';
+    } else {
+        geminiHTML = '<h3>Detected Incidents</h3>';
+        geminiHTML += '<ul class="incident-list">';
+
+        analysisData.incidents.forEach(incident => {
+            geminiHTML += `
+                <li class="incident-item" onclick="seekToTime(${incident.timestamp}); showIncidentDetails(${JSON.stringify(incident).replace(/"/g, '&quot;')})">
+                    <div style="display: flex; justify-content: space-between; align-items: center;">
                         <span class="incident-time">${formatTime(incident.timestamp)}</span>
-                        <span class="confidence-badge">${(incident.confidence * 100).toFixed(1)}%</span>
-                    </li>
-                `;
-            });
-            dinoHTML += '</ul>';
-        }
-
-        dinoResults.innerHTML = dinoHTML;
-    }
-
-    if (geminiData) {
-        let geminiHTML = '';
-
-        if (geminiData.error) {
-            geminiHTML = `<p style="color: red;">${geminiData.analysis}</p>`;
-        } else {
-            geminiHTML = `
-                <div style="white-space: pre-wrap; line-height: 1.8;">${geminiData.analysis}</div>
+                        <span class="confidence-badge">Score: ${incident.random_score}</span>
+                    </div>
+                    <p style="margin-top: 8px; font-size: 0.9em; color: #666;">
+                        Clip: ${formatTime(incident.clip_start)} - ${formatTime(incident.clip_end)}
+                    </p>
+                    <p style="margin-top: 8px; font-size: 0.95em; line-height: 1.5;">
+                        ${incident.analysis.substring(0, 150)}${incident.analysis.length > 150 ? '...' : ''}
+                    </p>
+                </li>
             `;
-
-            if (geminiData.incidents.length > 0) {
-                geminiHTML += '<h3 style="margin-top: 20px;">Flagged Incidents:</h3>';
-                geminiHTML += '<ul class="incident-list">';
-                geminiData.incidents.forEach(incident => {
-                    geminiHTML += `
-                        <li class="incident-item" onclick="seekToTime(${incident.timestamp})">
-                            <span class="incident-time">${formatTime(incident.timestamp)}</span>
-                            <p style="margin-top: 5px;">${incident.description}</p>
-                        </li>
-                    `;
-                });
-                geminiHTML += '</ul>';
-            }
-        }
-
-        geminiResults.innerHTML = geminiHTML;
+        });
+        geminiHTML += '</ul>';
     }
+
+    geminiResults.innerHTML = geminiHTML;
 }
 
 function createTimeline() {
@@ -173,32 +160,26 @@ function createTimeline() {
         return;
     }
 
-    if (dinoData && dinoData.incidents) {
-        dinoData.incidents.forEach(incident => {
-            createMarker(incident.timestamp, 'dino', incident);
-        });
-    }
-
-    if (geminiData && geminiData.incidents) {
-        geminiData.incidents.forEach(incident => {
-            createMarker(incident.timestamp, 'gemini', incident);
+    if (analysisData && analysisData.incidents) {
+        analysisData.incidents.forEach(incident => {
+            createMarker(incident);
         });
     }
 }
 
-function createMarker(timestamp, type, data) {
+function createMarker(incident) {
     const marker = document.createElement('div');
-    marker.className = `incident-marker ${type}`;
+    marker.className = 'incident-marker gemini';
 
-    const position = (timestamp / videoDuration) * 100;
+    const position = (incident.timestamp / videoDuration) * 100;
     marker.style.left = `${position}%`;
 
-    marker.setAttribute('data-time', formatTime(timestamp));
-    marker.setAttribute('data-timestamp', timestamp);
+    marker.setAttribute('data-time', formatTime(incident.timestamp));
+    marker.setAttribute('data-timestamp', incident.timestamp);
 
     marker.addEventListener('click', () => {
-        seekToTime(timestamp);
-        showIncidentDetails(data, type);
+        seekToTime(incident.timestamp);
+        showIncidentDetails(incident);
     });
 
     timelineBar.appendChild(marker);
@@ -213,21 +194,19 @@ function seekToTime(timestamp) {
     videoPlayer.play();
 }
 
-function showIncidentDetails(data, type) {
+function showIncidentDetails(incident) {
     const detailsDiv = document.getElementById('incidentDetails');
 
-    let html = `<h4 style="color: ${type === 'dino' ? '#ff6b6b' : '#4ecdc4'}; margin-bottom: 10px;">
-        ${type.toUpperCase()} Detection
+    let html = `<h4 style="color: #4ecdc4; margin-bottom: 10px;">
+        Incident at ${formatTime(incident.timestamp)}
     </h4>`;
 
-    html += `<p><strong>Timestamp:</strong> ${formatTime(data.timestamp)}</p>`;
-
-    if (type === 'dino') {
-        html += `<p><strong>Confidence:</strong> ${(data.confidence * 100).toFixed(1)}%</p>`;
-        html += `<p><strong>Type:</strong> ${data.type}</p>`;
-    } else {
-        html += `<p><strong>Description:</strong> ${data.description}</p>`;
-    }
+    html += `<p><strong>Random Score:</strong> ${incident.random_score}</p>`;
+    html += `<p><strong>Clip Duration:</strong> ${formatTime(incident.clip_start)} - ${formatTime(incident.clip_end)}</p>`;
+    html += `<div style="margin-top: 15px; padding: 15px; background: #f8f9fa; border-radius: 8px; line-height: 1.6;">
+        <strong>Gemini Analysis:</strong><br><br>
+        ${incident.analysis}
+    </div>`;
 
     detailsDiv.innerHTML = html;
 }
