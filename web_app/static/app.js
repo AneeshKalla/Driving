@@ -2,6 +2,12 @@ let currentFilename = null;
 let analysisData = null;
 let videoDuration = 0;
 let flagTimestamps = [];
+let flaggedTimestamps = new Set(); // Track timestamps we've already flagged
+let shouldAnalyze = false;
+let frameInFlight = false;
+let finalizeWhenIdle = false;
+let lastAnalyzedTime = null;
+let isFinalizing = false;
 
 const videoPlayer = document.getElementById('videoPlayer');
 const videoSection = document.getElementById('videoSection');
@@ -9,6 +15,7 @@ const resultsSection = document.getElementById('resultsSection');
 const timelineBar = document.getElementById('timelineBar');
 const currentTimeLabel = document.getElementById('currentTime');
 const durationLabel = document.getElementById('duration');
+const analysisStatus = document.getElementById('analysisStatus');
 
 videoPlayer.addEventListener('loadedmetadata', () => {
     videoDuration = videoPlayer.duration;
@@ -17,6 +24,37 @@ videoPlayer.addEventListener('loadedmetadata', () => {
 
 videoPlayer.addEventListener('timeupdate', () => {
     currentTimeLabel.textContent = formatTime(videoPlayer.currentTime);
+});
+
+// Start analyzing as soon as playback begins
+videoPlayer.addEventListener('play', () => {
+    if (!currentFilename) {
+        analysisStatus.innerHTML = '<span style="color: red;">Upload a video to start analysis.</span>';
+        videoPlayer.pause();
+        return;
+    }
+
+    shouldAnalyze = true;
+    finalizeWhenIdle = false;
+    analysisStatus.innerHTML = '<span style="color: blue;">Live analysis running during playback...</span>';
+    queueFrameAnalysis();
+});
+
+// Pause analysis when playback pauses
+videoPlayer.addEventListener('pause', () => {
+    shouldAnalyze = false;
+    if (!videoPlayer.ended) {
+        analysisStatus.innerHTML = '<span style="color: #666;">Analysis paused.</span>';
+    }
+});
+
+// Wrap up when playback finishes
+videoPlayer.addEventListener('ended', () => {
+    shouldAnalyze = false;
+    finalizeWhenIdle = true;
+    if (!frameInFlight) {
+        handlePlaybackComplete();
+    }
 });
 
 function formatTime(seconds) {
@@ -52,15 +90,25 @@ async function uploadVideo() {
 
         if (response.ok) {
             currentFilename = result.filename;
-            uploadStatus.innerHTML = '<span style="color: green;">✓ Video uploaded successfully!</span>';
+            uploadStatus.innerHTML = '<span style="color: green;">Video uploaded successfully!</span>';
 
             document.getElementById('videoSource').src = `/video/${currentFilename}`;
             videoPlayer.load();
+            videoPlayer.pause();
+            videoPlayer.currentTime = 0;
 
             videoSection.classList.remove('hidden');
             resultsSection.classList.add('hidden');
+            analysisData = null;
             clearTimeline();
             flagTimestamps = [];
+            flaggedTimestamps.clear();
+            shouldAnalyze = false;
+            frameInFlight = false;
+            finalizeWhenIdle = false;
+            lastAnalyzedTime = null;
+            isFinalizing = false;
+            analysisStatus.innerHTML = '<span style="color: #666;">Press play to start live analysis.</span>';
         } else {
             uploadStatus.innerHTML = `<span style="color: red;">Error: ${result.detail}</span>`;
         }
@@ -71,124 +119,143 @@ async function uploadVideo() {
     }
 }
 
-function captureFrame(video, time) {
+function captureCurrentFrame() {
     return new Promise((resolve) => {
-        video.currentTime = time;
-        video.onseeked = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const canvas = document.createElement('canvas');
+        canvas.width = videoPlayer.videoWidth;
+        canvas.height = videoPlayer.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(videoPlayer, 0, 0, canvas.width, canvas.height);
 
-            canvas.toBlob((blob) => {
-                resolve(blob);
-            }, 'image/jpeg', 0.95);
-        };
+        canvas.toBlob((blob) => {
+            resolve(blob);
+        }, 'image/jpeg', 0.95);
     });
 }
 
-async function analyzeVideo() {
-    if (!currentFilename) {
-        alert('Please upload a video first');
+function queueFrameAnalysis() {
+    if (!shouldAnalyze || videoPlayer.paused || videoPlayer.ended || frameInFlight) {
+        return;
+    }
+    requestAnimationFrame(() => analyzeCurrentFrame());
+}
+
+function handlePlaybackComplete() {
+    finalizeWhenIdle = false;
+    shouldAnalyze = false;
+
+    if (flagTimestamps.length > 0) {
+        finalizeAnalysis();
+    } else {
+        analysisStatus.innerHTML = '<span style="color: green;">Playback complete! No incidents detected.</span>';
+    }
+}
+
+async function analyzeCurrentFrame() {
+    if (!shouldAnalyze || videoPlayer.paused || videoPlayer.ended || frameInFlight || !currentFilename) {
         return;
     }
 
-    if (!videoDuration || videoDuration === 0) {
-        alert('Video not loaded yet. Please wait.');
+    frameInFlight = true;
+
+    const currentTime = Number(videoPlayer.currentTime.toFixed(3));
+
+    // Avoid re-sending the exact same frame if playback has not advanced
+    if (lastAnalyzedTime !== null && Math.abs(currentTime - lastAnalyzedTime) < 0.05) {
+        frameInFlight = false;
+        setTimeout(queueFrameAnalysis, 50);
         return;
     }
 
-    const analyzeBtn = document.getElementById('analyzeBtn');
-    const analysisStatus = document.getElementById('analysisStatus');
-
-    analyzeBtn.disabled = true;
-    clearTimeline();
-    flagTimestamps = [];
+    lastAnalyzedTime = currentTime;
+    const frameLabel = formatTime(currentTime);
+    analysisStatus.innerHTML = `<span style="color: blue;">Analyzing frame at ${frameLabel}... <div class="loading"></div></span>`;
 
     try {
-        // Phase 1: Extract and score frames
-        analysisStatus.innerHTML = '<span style="color: blue;">Extracting and scoring frames... <div class="loading"></div></span>';
+        const frameBlob = await captureCurrentFrame();
 
-        const frameInterval = 1; // Sample every 1 second
-        const totalFrames = Math.floor(videoDuration);
+        const formData = new FormData();
+        formData.append('file', frameBlob, `frame_${currentTime}.jpg`);
 
-        for (let second = 0; second < totalFrames; second++) {
-            analysisStatus.innerHTML = `<span style="color: blue;">Scoring frame ${second + 1}/${totalFrames}... <div class="loading"></div></span>`;
+        const response = await fetch('/score_frame', {
+            method: 'POST',
+            body: formData
+        });
 
-            // Capture frame at this timestamp
-            const frameBlob = await captureFrame(videoPlayer, second);
+        const result = await response.json();
 
-            // Send frame to backend for scoring
-            const formData = new FormData();
-            formData.append('file', frameBlob, `frame_${second}.jpg`);
+        if (response.ok) {
+            const score = result.score;
 
-            const response = await fetch('/score_frame', {
-                method: 'POST',
-                body: formData
-            });
-
-            const result = await response.json();
-
-            if (response.ok) {
-                const score = result.score;
-                console.log(`Frame at ${second}s: score = ${score}`);
-
-                // If score > 0.8, flag it
-                if (score > 0.8) {
-                    flagTimestamps.push(second);
-                    addFlagMarker(second, score);
+            // If score > 0.8, flag it
+            if (score > 0.8) {
+                const roundedTimestamp = Number(currentTime.toFixed(2));
+                if (!flaggedTimestamps.has(roundedTimestamp)) {
+                    flaggedTimestamps.add(roundedTimestamp);
+                    flagTimestamps.push(roundedTimestamp);
+                    addFlagMarker(roundedTimestamp, score);
                 }
+                analysisStatus.innerHTML = `<span style="color: red;">Incident flagged at ${frameLabel} (score: ${score.toFixed(4)})</span>`;
             } else {
-                console.error(`Failed to score frame at ${second}s`);
+                analysisStatus.innerHTML = `<span style="color: green;">Frame at ${frameLabel}: ${score.toFixed(4)}</span>`;
             }
+        } else {
+            analysisStatus.innerHTML = `<span style="color: red;">Failed to score frame at ${frameLabel}</span>`;
         }
+    } catch (error) {
+        console.error('Frame analysis error:', error);
+        analysisStatus.innerHTML = `<span style="color: red;">Frame analysis error: ${error.message}</span>`;
+    } finally {
+        frameInFlight = false;
 
-        console.log(`Total flags: ${flagTimestamps.length}`, flagTimestamps);
+        if (videoPlayer.ended || finalizeWhenIdle) {
+            handlePlaybackComplete();
+        } else if (shouldAnalyze) {
+            queueFrameAnalysis();
+        }
+    }
+}
 
-        // Phase 2: Analyze flagged clips with Gemini
-        if (flagTimestamps.length === 0) {
-            analysisStatus.innerHTML = '<span style="color: green;">✓ Analysis complete! No incidents detected (all scores < 0.80).</span>';
-            analysisData = {
-                total_duration: videoDuration,
-                total_flags: 0,
-                total_clips: 0,
-                incidents: []
-            };
+async function finalizeAnalysis() {
+    if (flagTimestamps.length === 0 || isFinalizing) {
+        return;
+    }
+
+    isFinalizing = true;
+    analysisStatus.innerHTML = `<span style="color: blue;">Analyzing ${flagTimestamps.length} flagged clips with Gemini... <div class="loading"></div></span>`;
+
+    try {
+        const analyzeResponse = await fetch(`/analyze_flags/${currentFilename}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify(flagTimestamps)
+        });
+
+        const analyzeResult = await analyzeResponse.json();
+
+        if (analyzeResponse.ok) {
+            analysisData = analyzeResult;
+            analysisStatus.innerHTML = '<span style="color: green;">Analysis complete!</span>';
             displayResults();
             resultsSection.classList.remove('hidden');
         } else {
-            analysisStatus.innerHTML = `<span style="color: blue;">Analyzing ${flagTimestamps.length} flagged clips with Gemini... <div class="loading"></div></span>`;
-
-            const analyzeResponse = await fetch(`/analyze_flags/${currentFilename}`, {
-                method: 'POST',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                body: JSON.stringify(flagTimestamps)
-            });
-
-            const analyzeResult = await analyzeResponse.json();
-
-            if (analyzeResponse.ok) {
-                analysisData = analyzeResult;
-                analysisStatus.innerHTML = '<span style="color: green;">✓ Analysis complete!</span>';
-                displayResults();
-                resultsSection.classList.remove('hidden');
-            } else {
-                analysisStatus.innerHTML = `<span style="color: red;">Error: ${analyzeResult.detail}</span>`;
-            }
+            analysisStatus.innerHTML = `<span style="color: red;">Error: ${analyzeResult.detail}</span>`;
         }
-
     } catch (error) {
         analysisStatus.innerHTML = `<span style="color: red;">Analysis failed: ${error.message}</span>`;
-        console.error('Analysis error:', error);
+        console.error('Finalization error:', error);
     } finally {
-        analyzeBtn.disabled = false;
+        isFinalizing = false;
     }
 }
 
 function addFlagMarker(timestamp, score) {
+    if (!videoDuration) {
+        return;
+    }
+
     const marker = document.createElement('div');
     marker.className = 'incident-marker flag';
     marker.style.backgroundColor = 'red';
