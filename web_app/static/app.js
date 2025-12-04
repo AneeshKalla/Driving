@@ -247,8 +247,8 @@ async function finalizeAnalysis() {
             analysisStatus.innerHTML = '<span style="color: green;">Analysis complete!</span>';
             displayResults();
             resultsSection.classList.remove('hidden');
-            // Update frame score box with merged clip count
-            frameScoreBox.textContent = `Merged clips analyzed: ${analysisData.total_clips}`;
+            const mergedClips = analysisData?.incidents ? analysisData.incidents.length : analysisData.total_clips;
+            frameScoreBox.textContent = `Merged clips analyzed: ${mergedClips}`;
         } else {
             analysisStatus.innerHTML = `<span style="color: red;">Error: ${analyzeResult.detail}</span>`;
         }
@@ -289,11 +289,13 @@ function displayResults() {
 
     if (!analysisData) return;
 
+    const mergedClips = analysisData?.incidents ? analysisData.incidents.length : analysisData.total_clips;
+
     // Summary panel
     let summaryHTML = `
         <p><strong>Video Duration:</strong> ${formatTime(analysisData.total_duration)}</p>
         <p><strong>Flags Detected:</strong> ${analysisData.total_flags}</p>
-        <p><strong>Merged Clips:</strong> ${analysisData.total_clips}</p>
+        <p><strong>Merged Clips:</strong> ${mergedClips}</p>
         <p><strong>Detection Threshold:</strong> DINO Score > 0.80</p>
     `;
     dinoResults.innerHTML = summaryHTML;
