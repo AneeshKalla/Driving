@@ -10,6 +10,10 @@ from typing import List, Dict, Any
 import random
 import cv2
 from google import genai
+from dotenv import load_dotenv
+
+# Load environment variables from root .env file
+load_dotenv()
 
 app = FastAPI(title="Driving Analysis Web App")
 
@@ -34,12 +38,12 @@ gemini_client = None
 @app.on_event("startup")
 async def startup_event():
     global gemini_client
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = os.getenv("GOOGLE_API_KEY")
     if api_key:
         gemini_client = genai.Client(api_key=api_key)
         print("Gemini client initialized successfully!")
     else:
-        print("Warning: GEMINI_API_KEY not found in environment variables")
+        print("Warning: GOOGLE_API_KEY not found in .env file")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
