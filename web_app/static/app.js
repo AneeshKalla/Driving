@@ -16,6 +16,7 @@ const timelineBar = document.getElementById('timelineBar');
 const currentTimeLabel = document.getElementById('currentTime');
 const durationLabel = document.getElementById('duration');
 const analysisStatus = document.getElementById('analysisStatus');
+const frameScoreBox = document.getElementById('frameScoreBox');
 
 videoPlayer.addEventListener('loadedmetadata', () => {
     videoDuration = videoPlayer.duration;
@@ -109,6 +110,7 @@ async function uploadVideo() {
             lastAnalyzedTime = null;
             isFinalizing = false;
             analysisStatus.innerHTML = '<span style="color: #666;">Press play to start live analysis.</span>';
+            frameScoreBox.textContent = 'Waiting for analysis...';
         } else {
             uploadStatus.innerHTML = `<span style="color: red;">Error: ${result.detail}</span>`;
         }
@@ -170,6 +172,7 @@ async function analyzeCurrentFrame() {
     lastAnalyzedTime = currentTime;
     const frameLabel = formatTime(currentTime);
     analysisStatus.innerHTML = `<span style="color: blue;">Analyzing frame at ${frameLabel}... <div class="loading"></div></span>`;
+    frameScoreBox.textContent = `Analyzing ${frameLabel}...`;
 
     try {
         const frameBlob = await captureCurrentFrame();
@@ -196,15 +199,19 @@ async function analyzeCurrentFrame() {
                     addFlagMarker(roundedTimestamp, score);
                 }
                 analysisStatus.innerHTML = `<span style="color: red;">Incident flagged at ${frameLabel} (score: ${score.toFixed(4)})</span>`;
+                frameScoreBox.textContent = `Frame ${frameLabel} • Score: ${score.toFixed(4)} • Flagged`;
             } else {
                 analysisStatus.innerHTML = `<span style="color: green;">Frame at ${frameLabel}: ${score.toFixed(4)}</span>`;
+                frameScoreBox.textContent = `Frame ${frameLabel} • Score: ${score.toFixed(4)}`;
             }
         } else {
             analysisStatus.innerHTML = `<span style="color: red;">Failed to score frame at ${frameLabel}</span>`;
+            frameScoreBox.textContent = `Frame ${frameLabel} • Scoring failed`;
         }
     } catch (error) {
         console.error('Frame analysis error:', error);
         analysisStatus.innerHTML = `<span style="color: red;">Frame analysis error: ${error.message}</span>`;
+        frameScoreBox.textContent = `Frame ${frameLabel} • Error: ${error.message}`;
     } finally {
         frameInFlight = false;
 
@@ -240,6 +247,8 @@ async function finalizeAnalysis() {
             analysisStatus.innerHTML = '<span style="color: green;">Analysis complete!</span>';
             displayResults();
             resultsSection.classList.remove('hidden');
+            // Update frame score box with merged clip count
+            frameScoreBox.textContent = `Merged clips analyzed: ${analysisData.total_clips}`;
         } else {
             analysisStatus.innerHTML = `<span style="color: red;">Error: ${analyzeResult.detail}</span>`;
         }

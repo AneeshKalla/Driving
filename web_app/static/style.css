@@ -92,6 +92,17 @@ button:disabled {
     background: #000;
 }
 
+.frame-score {
+    background: #0b172a;
+    color: #e8f0ff;
+    padding: 12px 16px;
+    border-radius: 10px;
+    margin-bottom: 12px;
+    font-weight: 600;
+    letter-spacing: 0.3px;
+    box-shadow: 0 6px 18px rgba(0, 0, 0, 0.2);
+}
+
 #videoPlayer {
     width: 100%;
     max-height: 600px;
