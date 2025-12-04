@@ -9,25 +9,14 @@ import uvicorn
 from typing import List, Dict, Any
 import cv2
 from dotenv import load_dotenv
-import random
 
 # Load environment variables from root .env file
 load_dotenv()
 
-# Import Gemini for video analysis
-from google import genai
-from time import sleep
-
-client = genai.Client()
-
-def predict_video(path: str):
-    """Analyze video clip with Gemini VLM"""
-    myfile = client.files.upload(file=path)
-    sleep(5)
-    response = client.models.generate_content(
-        model="gemini-3-pro-preview", contents=[myfile, "Explain what bad driving is happening in the video, if any."]
-    )
-    return response.text
+# Import predict functions from root models.py
+import sys
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from models import predict_image, predict_video
 
 app = FastAPI(title="Driving Analysis Web App")
 
@@ -117,8 +106,51 @@ def get_video_duration(video_path: str) -> float:
     cap.release()
     return duration
 
-@app.post("/analyze/{filename}")
-async def analyze_video(filename: str):
+FRAMES_DIR = Path("web_app/frames")
+FRAMES_DIR.mkdir(exist_ok=True)
+
+@app.post("/score_frame")
+async def score_frame(file: UploadFile = File(...)):
+    """Score a single frame using DINO model"""
+    try:
+        # Save frame temporarily
+        frame_path = FRAMES_DIR / f"temp_{file.filename}"
+        with open(frame_path, "wb") as buffer:
+            shutil.copyfileobj(file.file, buffer)
+
+        # Get DINO score
+        score = predict_image(str(frame_path))
+
+        # Clean up
+        frame_path.unlink()
+
+        return JSONResponse(content={"score": round(score, 4)})
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Scoring failed: {str(e)}")
+
+def merge_overlapping_intervals(intervals: List[tuple]) -> List[tuple]:
+    """Merge overlapping time intervals"""
+    if not intervals:
+        return []
+
+    # Sort by start time
+    sorted_intervals = sorted(intervals, key=lambda x: x[0])
+    merged = [sorted_intervals[0]]
+
+    for current in sorted_intervals[1:]:
+        last = merged[-1]
+        # If current overlaps with last, merge them
+        if current[0] <= last[1]:
+            merged[-1] = (last[0], max(last[1], current[1]))
+        else:
+            merged.append(current)
+
+    return merged
+
+@app.post("/analyze_flags/{filename}")
+async def analyze_flags(filename: str, flags: List[float]):
+    """Aggregate flags into clips and analyze with Gemini"""
     file_path = UPLOAD_DIR / filename
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Video not found")
@@ -128,62 +160,49 @@ async def analyze_video(filename: str):
         for clip_file in CLIPS_DIR.glob("*"):
             clip_file.unlink()
 
-        # Get video duration
         duration = get_video_duration(str(file_path))
         print(f"Video duration: {duration:.2f} seconds")
+        print(f"Received {len(flags)} flags: {flags}")
 
-        # Phase 1: Sample every 3 seconds and extract clips where random score > 0.8
-        clips_to_analyze = []
+        # Create intervals for each flag (10s before to 5s after)
+        intervals = []
+        for flag_time in flags:
+            start = max(0, flag_time - 10)
+            end = min(duration, flag_time + 5)
+            intervals.append((start, end))
 
-        # Sample every 3 seconds
-        for second in range(0, int(duration), 3):
-            # Generate random score (0.00 to 1.00)
-            random_score = round(random.random(), 2)
-            print(f"Second {second}: random score = {random_score}")
+        # Merge overlapping intervals
+        merged_intervals = merge_overlapping_intervals(intervals)
+        print(f"Merged into {len(merged_intervals)} clips: {merged_intervals}")
 
-            if random_score > 0.8:
-                # Extract clip: 10 seconds before to 5 seconds after
-                clip_start = second - 10
-                clip_end = second + 5
-
-                # Create clip
-                clip_filename = f"clip_{second}s.mp4"
-                clip_path = CLIPS_DIR / clip_filename
-
-                print(f"Extracting clip from {clip_start}s to {clip_end}s...")
-                extract_clip(str(file_path), clip_start, clip_end, str(clip_path))
-
-                clips_to_analyze.append({
-                    "timestamp": second,
-                    "clip_start": max(0, clip_start),
-                    "clip_end": min(duration, clip_end),
-                    "random_score": random_score,
-                    "clip_path": str(clip_path)
-                })
-
-        # Phase 2: Send all clips to Gemini at once
-        print(f"\nPhase 2: Analyzing {len(clips_to_analyze)} clips with Gemini VLM...")
+        # Extract and analyze each merged clip
         incidents = []
+        for i, (clip_start, clip_end) in enumerate(merged_intervals):
+            clip_filename = f"clip_{i}_{clip_start:.1f}_{clip_end:.1f}.mp4"
+            clip_path = CLIPS_DIR / clip_filename
 
-        for i, clip_data in enumerate(clips_to_analyze):
-            print(f"Analyzing clip {i+1}/{len(clips_to_analyze)} (timestamp: {clip_data['timestamp']}s)...")
-            gemini_analysis = predict_video(clip_data['clip_path'])
+            print(f"Extracting clip {i+1}/{len(merged_intervals)}: {clip_start:.1f}s to {clip_end:.1f}s")
+            extract_clip(str(file_path), clip_start, clip_end, str(clip_path))
+
+            # Analyze with Gemini
+            print(f"Analyzing clip {i+1} with Gemini...")
+            gemini_analysis = predict_video(str(clip_path))
 
             incidents.append({
-                "timestamp": clip_data["timestamp"],
-                "clip_start": clip_data["clip_start"],
-                "clip_end": clip_data["clip_end"],
-                "random_score": clip_data["random_score"],
+                "clip_number": i + 1,
+                "clip_start": clip_start,
+                "clip_end": clip_end,
                 "analysis": gemini_analysis
             })
             print(f"Clip {i+1} analysis complete!")
 
-        print(f"\nAll analysis complete! Found {len(incidents)} incidents.")
+        print(f"All analysis complete! {len(incidents)} clips analyzed.")
 
         return JSONResponse(content={
             "total_duration": duration,
+            "total_flags": len(flags),
             "incidents": incidents,
-            "total_incidents": len(incidents)
+            "total_clips": len(incidents)
         })
 
     except Exception as e:
