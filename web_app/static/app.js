@@ -172,7 +172,6 @@ async function analyzeCurrentFrame() {
     lastAnalyzedTime = currentTime;
     const frameLabel = formatTime(currentTime);
     analysisStatus.innerHTML = `<span style="color: blue;">Analyzing frame at ${frameLabel}... <div class="loading"></div></span>`;
-    frameScoreBox.textContent = `Analyzing ${frameLabel}...`;
 
     try {
         const frameBlob = await captureCurrentFrame();
