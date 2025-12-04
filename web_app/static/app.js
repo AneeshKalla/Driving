@@ -116,8 +116,8 @@ function displayResults() {
     let summaryHTML = `
         <p><strong>Video Duration:</strong> ${formatTime(analysisData.total_duration)}</p>
         <p><strong>Incidents Detected:</strong> ${analysisData.total_incidents}</p>
-        <p><strong>Random Sampling:</strong> Every 1 second</p>
-        <p><strong>Detection Threshold:</strong> Score > 0.80</p>
+        <p><strong>Sampling Rate:</strong> Every 3 seconds</p>
+        <p><strong>Detection Threshold:</strong> Random Score > 0.80</p>
     `;
     dinoResults.innerHTML = summaryHTML;
 

@@ -7,13 +7,27 @@ import shutil
 from pathlib import Path
 import uvicorn
 from typing import List, Dict, Any
-import random
 import cv2
-from google import genai
 from dotenv import load_dotenv
+import random
 
 # Load environment variables from root .env file
 load_dotenv()
+
+# Import Gemini for video analysis
+from google import genai
+from time import sleep
+
+client = genai.Client()
+
+def predict_video(path: str):
+    """Analyze video clip with Gemini VLM"""
+    myfile = client.files.upload(file=path)
+    sleep(5)
+    response = client.models.generate_content(
+        model="gemini-3-pro-preview", contents=[myfile, "Explain what bad driving is happening in the video, if any."]
+    )
+    return response.text
 
 app = FastAPI(title="Driving Analysis Web App")
 
@@ -33,17 +47,10 @@ app.mount("/static", StaticFiles(directory="web_app/static"), name="static")
 CLIPS_DIR = Path("web_app/clips")
 CLIPS_DIR.mkdir(exist_ok=True)
 
-gemini_client = None
-
 @app.on_event("startup")
 async def startup_event():
-    global gemini_client
-    api_key = os.getenv("GOOGLE_API_KEY")
-    if api_key:
-        gemini_client = genai.Client(api_key=api_key)
-        print("Gemini client initialized successfully!")
-    else:
-        print("Warning: GOOGLE_API_KEY not found in .env file")
+    print("Driving Analysis Web App started!")
+    print("Using Gemini VLM for video analysis")
 
 @app.get("/", response_class=HTMLResponse)
 async def read_root():
@@ -116,9 +123,6 @@ async def analyze_video(filename: str):
     if not file_path.exists():
         raise HTTPException(status_code=404, detail="Video not found")
 
-    if not gemini_client:
-        raise HTTPException(status_code=500, detail="Gemini API key not configured")
-
     try:
         # Clear old clips
         for clip_file in CLIPS_DIR.glob("*"):
@@ -128,13 +132,14 @@ async def analyze_video(filename: str):
         duration = get_video_duration(str(file_path))
         print(f"Video duration: {duration:.2f} seconds")
 
-        incidents = []
+        # Phase 1: Sample every 3 seconds and extract clips where random score > 0.8
+        clips_to_analyze = []
 
-        # Sample every second
-        for second in range(int(duration)):
-            # Generate random number (0.00 to 1.00)
+        # Sample every 3 seconds
+        for second in range(0, int(duration), 3):
+            # Generate random score (0.00 to 1.00)
             random_score = round(random.random(), 2)
-            print(f"Second {second}: score = {random_score}")
+            print(f"Second {second}: random score = {random_score}")
 
             if random_score > 0.8:
                 # Extract clip: 10 seconds before to 5 seconds after
@@ -148,27 +153,32 @@ async def analyze_video(filename: str):
                 print(f"Extracting clip from {clip_start}s to {clip_end}s...")
                 extract_clip(str(file_path), clip_start, clip_end, str(clip_path))
 
-                # Send to Gemini
-                print(f"Analyzing clip with Gemini...")
-                uploaded_file = gemini_client.files.upload(file=str(clip_path))
-
-                response = gemini_client.models.generate_content(
-                    model="gemini-3-pro-preview",
-                    contents=[
-                        uploaded_file,
-                        "Analyze this driving video clip. Identify any bad driving behaviors such as: unsafe lane changes, following too closely, failure to yield, distracted driving, speeding, or any traffic violations. Be specific and concise about what happens."
-                    ]
-                )
-
-                incidents.append({
+                clips_to_analyze.append({
                     "timestamp": second,
                     "clip_start": max(0, clip_start),
                     "clip_end": min(duration, clip_end),
                     "random_score": random_score,
-                    "analysis": response.text
+                    "clip_path": str(clip_path)
                 })
 
-                print(f"Analysis complete for second {second}")
+        # Phase 2: Send all clips to Gemini at once
+        print(f"\nPhase 2: Analyzing {len(clips_to_analyze)} clips with Gemini VLM...")
+        incidents = []
+
+        for i, clip_data in enumerate(clips_to_analyze):
+            print(f"Analyzing clip {i+1}/{len(clips_to_analyze)} (timestamp: {clip_data['timestamp']}s)...")
+            gemini_analysis = predict_video(clip_data['clip_path'])
+
+            incidents.append({
+                "timestamp": clip_data["timestamp"],
+                "clip_start": clip_data["clip_start"],
+                "clip_end": clip_data["clip_end"],
+                "random_score": clip_data["random_score"],
+                "analysis": gemini_analysis
+            })
+            print(f"Clip {i+1} analysis complete!")
+
+        print(f"\nAll analysis complete! Found {len(incidents)} incidents.")
 
         return JSONResponse(content={
             "total_duration": duration,

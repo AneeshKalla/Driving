@@ -1,22 +1,24 @@
 # Driving Analysis Web App
 
-A web application for analyzing driving videos using Google Gemini VLM to detect and analyze driving incidents.
+A web application for analyzing driving videos using random sampling and Google Gemini VLM for detailed analysis.
 
 ## Features
 
 - Upload driving videos (MP4, AVI, MOV formats)
-- Random sampling analysis: Samples every second of the video
-- When a detection threshold is exceeded (score > 0.8):
+- Random sampling: Samples every 3 seconds with random scores (0.00-1.00)
+- When random score > 0.80:
   - Extracts a 15-second clip (10 seconds before + 5 seconds after)
-  - Sends clip to Gemini for detailed AI analysis
+  - Sends clip to Gemini VLM for detailed AI analysis
 - Interactive video player with timeline
 - Visual timeline markers showing detected incidents
-- Click markers to view full Gemini analysis with timestamps
+- Click markers to view full Gemini analysis with random scores
 
 ## Prerequisites
 
 1. Python 3.8 or higher
-2. Google Gemini API key (for video analysis)
+2. Trained DINO model checkpoint: `dino_classifier_89auc_v1_12.4.3:24.pt` (in root directory)
+3. Google Gemini API key (for video analysis)
+4. PyTorch with appropriate backend (CPU, CUDA, or MPS for Apple Silicon)
 
 ## Installation
 
@@ -74,13 +76,16 @@ Then manually navigate to `http://localhost:8000` in your browser.
 
 ## How It Works
 
-1. **Random Sampling**: The backend samples the video every 1 second
-2. **Threshold Detection**: For each second, generates a random score (0.00-1.00)
-3. **Clip Extraction**: If score > 0.8:
+1. **Frame Extraction**: For every second of the video, extracts a single frame
+2. **DINO Analysis**: Runs each frame through the DINO classifier (`predict_image()` from `models.py`)
+   - Returns incident probability score (0.0-1.0)
+   - Uses trained DINOv3 model with dual-path binary classifier
+3. **Threshold Detection**: If DINO score > 0.8, flags as potential incident
+4. **Clip Extraction**: For flagged incidents:
    - Extracts 15-second clip (10s before + 5s after trigger point)
    - Saves clip temporarily to `web_app/clips/`
-4. **Gemini Analysis**: Uploads clip to Google Gemini API
-5. **Results**: Returns detailed analysis with timestamps and detected behaviors
+5. **Gemini Analysis**: Uploads clip to Google Gemini API (`predict_video()` from `models.py`)
+6. **Results**: Returns detailed analysis with timestamps, DINO scores, and Gemini insights
 
 ## API Endpoints
 
@@ -93,11 +98,21 @@ Then manually navigate to `http://localhost:8000` in your browser.
 
 - Only one video can be analyzed at a time (previous uploads are overwritten)
 - Video files are stored temporarily in `web_app/uploads/`
+- Extracted frames are stored in `web_app/frames/` and cleared on each analysis
 - Extracted clips are stored in `web_app/clips/` and cleared on each analysis
+- Requires trained DINO model checkpoint: `dino_classifier_89auc_v1_12.4.3:24.pt` in root directory
+- Uses `models.py` from root directory for predictions
 - Gemini analysis requires internet connection and API key
 - Analysis time depends on video length and number of incidents detected
+- DINO model runs on available hardware (MPS for Apple Silicon, CPU otherwise)
 
 ## Troubleshooting
+
+**DINO model not loading:**
+- Ensure `dino_classifier_89auc_v1_12.4.3:24.pt` is in the root directory
+- Check PyTorch installation: `python -c "import torch; print(torch.__version__)"`
+- Verify that `models.py` can be imported from the web app
+- Check for DINOv3 model download (happens on first run via torch.hub)
 
 **API key not working:**
 - Verify `GOOGLE_API_KEY` is set correctly in `.env` file
@@ -108,8 +123,14 @@ Then manually navigate to `http://localhost:8000` in your browser.
 - Check internet connection
 - Ensure you have API quota remaining
 - Verify the API key has permission to use Gemini models
+- Allow 5-second delay for Gemini file upload processing
 
 **Video not playing:**
 - Try converting video to MP4 format
 - Ensure video codec is supported by browser (H.264 recommended)
 - Check that the video file is not corrupted
+
+**Analysis taking too long:**
+- DINO runs on every frame (1 per second), so longer videos take more time
+- Each incident triggers a Gemini analysis which adds ~10-15 seconds
+- Consider reducing video length or adjusting detection threshold
