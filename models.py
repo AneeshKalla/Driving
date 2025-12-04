@@ -245,6 +245,12 @@ def predict_image(path: str):
 
     return prob  # probability in [0,1]; logit is logits[0].item() if you need it
 
+from dotenv import load_dotenv
+load_dotenv()
+
+os.environ["GOOGLE_API_KEY"] = "AIzaSyDFCX84hFp-AaolwiHoo0vINFk7cLISS-o"
+os.environ["GENAI_API_KEY"] = "AIzaSyDFCX84hFp-AaolwiHoo0vINFk7cLISS-o"
+
 
 from google import genai
 from time import sleep
@@ -257,3 +263,7 @@ def predict_video(path: str):
         model="gemini-3-pro-preview", contents=[myfile, "Explain what bad driving is happening in the video, if any."]
     )
     return(response.text)
+
+
+#print(predict_image("/Users/aneeshkalla/Desktop/Driving_Tool/frames/images/00000_0.0s.jpg"))
+#print(predict_video("/Users/aneeshkalla/Desktop/Driving_Tool/temp_videos/00822.mp4"))
